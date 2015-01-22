@@ -1,0 +1,160 @@
+---
+title: 'Machine Learning: Classification of Barbell Lift Data'
+author: "Gareth Houk"
+date: "Tuesday, January 20, 2015"
+output: html_document
+---
+Load libraries:
+```{r,echo=TRUE}
+require(caret)
+require(lattice)
+```
+
+```{r,echo=FALSE}
+# load data
+trdata<-read.csv("pml-training.csv")
+tsdata<-read.csv("pml-testing.csv")
+```
+
+## Executive Summary
+
+## Introduction
+
+Our purpose is to predict which 5 different exercises subjects are performing in a `r dim(tsdata)[1]` element test set where the exercise label is hidden.  Modeling may proceed from a large dataset consisting of `r dim(trdata)[1]` samples of `r dim(trdata)[2]` variables including the revealed exercise labels (variable `r names(trdata)[length(trdata)]` with valid levels `r levels(trdata[,length(trdata)])`).  
+
+## Analytic Outline
+
+Creating a prediction model consists of six steps.  We note as follows an outline of how we will proceed.
+
+- Question.  Our goal is to create a model which accurately predicts the exercise in the test sample.  We want to get a perfect score on the assignment, so naturally we will always put priority on accuracy of such considerations as interpretability, speed, simplicity, and scalability.
+- Input Data.  Our input data is as described above.
+- Features.  We must determine which features of the data are useful in achieving an optimal answer to our data modeling question.  In the "Exploratory Data Analysis" section below, we address pre-processing of the data with this goal in mind.
+- Algorithm.  We have a large number of algorithms available for modeling, however, few are appropriate to the outcome variable, a factor variable with five discrete levels.  The only models we consider are therefore classification trees, linear discriminant analysis and random forests.  Other algorithms such as regressions and generalized linear models are not natural fits to categorical independent variables.
+- Parameters.  Once we have determined the likely best algorithm (i.e. the most accurate), we may tune is execution to arrives at the best possible results.  In our case we will briefly explore the use of PCA pre-processing.
+- Evaluation.  The evaluation will consists of two parts: testing on a saved-out portion of the training set and then the final test of submiting the algorithm to evaluation through the test set.
+
+## Exploratory Data Analysis
+
+Since our main goal is success on the testing set, we will start by examining that data set.
+
+### Missing variables
+```{r, echo=FALSE}
+tskeepcol<-!is.na(unname(apply(tsdata,FUN=unique,2)))
+tsdata<-tsdata[,tskeepcol]
+trdata<-trdata[,tskeepcol]
+```
+We note that there are `r sum(!tskeepcol)` variables in the test set for which every entry is NA.  There are NO variables in the training set for which every entry is NA, so valid data does exist for many of these features, however, as noted, they cannot help us to maximize accuracy in the test set (although obviously they may be useful in maximizing in-sample accuracy).  Since we cannot possibly use these variables for test sample prediction, we immediately eliminate these variables in the training and test sets.  
+
+In addition, the first seven columns (`r names(trdata[,1:7])`) are obviously not kinematic features, and so can be dropped.  It is possible that `r names(trdata[,2])` could be of use in prediction, but training the algorithm on individual subjects does not seem very sporting or generally applicable.
+```{r, echo=FALSE}
+tsdata<-tsdata[,-c(1:7)]
+trdata<-trdata[,-c(1:7)]
+```
+
+This leaves the `r sum(tskeepcol)` variables shown below for the training set.
+
+```{r}
+names(trdata)
+```
+
+There were a LOT of missing variables in the original training set also, but all of the missing variables were the same as the ones missing in the test set.  We can use the complete.cases function to show that `r round(100*sum(complete.cases(trdata))/dim(trdata)[1],1)`% of the training set has entries for every variable.  
+
+### Low variance and Collinearity Check
+
+We find that `r length(nearZeroVar(trdata,saveMetrics=TRUE))` variables in the training set have near-zero variance.  
+
+We also want to investigate the correlations between variables with an eye to reducing unnecessary dimensions in the data.  To that end, we plot below the correlation matrix for all variable, and, following that, all variables with an absolute correlation greater than `r cor_cut<-0.975;cor_cut` with at least one other variable.  A pairs plot shows the relationships between these features.
+
+
+```{r, echo=FALSE}
+cormtx<-cor(trdata[sapply(trdata, is.numeric)])
+diag(cormtx)<-0
+levelplot(cormtx,scales=list(x=list(rot=90)))
+idx1d<-which(abs(cormtx)>cor_cut)
+idxcol<-idx1d %% dim(cormtx)[1]
+idxrow<-ceiling(idx1d/dim(cormtx)[1])
+cormtx2<-cormtx[unique(sort(idxrow)),unique(sort(idxcol))]
+levelplot(cormtx2,scales=list(x=list(rot=90)))
+hcor<-attr(cormtx2,"dimnames")[[1]]
+hcortrdata <- trdata[,hcor]
+pairs(hcortrdata)
+```
+
+While some of the variables are indeed highly correlated, there is nonetheless structure in nearly every relationship.  Even the highest correlation (`r max(cormtx2)`), between *roll_belt* and *accel_belt_z*, is incomplete.  If our purpose were to gain efficiency, it might be useful to reduce dimensionality via PCA analysis, but instead we retain all the variables, at least for the initial model formulation.  
+
+### Initial Models and Cross-Validation
+
+We split the "training" CSV data set into a simple 70%/30% split between  training and validation samples.  We use the word "validation" to avoid the use of the word "test" sample, which has unfortunately been chosen for us with the 20 "quiz" samples for submission.  But to be clear, the "training" sample will be used for model creation and the "validation" sample will be used for cross-validation.
+
+```{r}
+inTrain<-createDataPartition(y=trdata$classe,p=0.7,list=FALSE)
+training <- trdata[inTrain,] 
+validation <- trdata[-inTrain,]
+```
+        
+We attempt three initial models using all `r dim(training)[2]-1` features in the training set.  Those models are a Classification and Regression Tree (method="rpart"), a Linear Discriminant Analysis model (method="lda"), and a Random Forest model (method="rf").  In the RD model, we have chosen to use cross validation in the training control option.  Cross validation in the "validation" sample follows model formation below.  (The RF method training is prohibitively long, so we have inserted code to measure its execution time for comparison below.)
+
+
+```{r}
+# Models
+model_rpart <- train(classe ~. ,data=training,method="rpart")
+model_lda   <- train(classe ~. ,data=training,method="lda")
+set.seed(450921)
+start.time <- Sys.time()
+model_rf    <- train(classe~.,data=training,method="rf",trControl=trainControl(method = "cv", number = 4))
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+time.taken
+time.takenRF<-time.taken
+# Predictions in validation sample
+pred_rpart  <- predict(model_rpart, validation)
+pred_lda    <- predict(model_lda, validation)
+pred_rf     <- predict(model_rf, validation)
+# Cross validation
+cm_rpart<-confusionMatrix(pred_rpart, validation$classe); print(cm_rpart)
+cm_lda  <-confusionMatrix(pred_lda  , validation$classe); print(cm_lda)
+cm_rf   <-confusionMatrix(pred_rf   , validation$classe); print(cm_rf)
+```
+
+We find that the RF model yields the highest Accuracy at `r round(unname(cm_rf$overall[1]),3)`, considerably higher than the values of `r round(unname(cm_rpart$overall[1]),3)` and `r round(unname(cm_lda$overall[1]),3)` found in the CART and LDA methods.  For this reason, we select the RF method for our model.
+
+### Does PCA help?
+
+Mostly for my own edification, I wanted to see if including a PCA reduction of the input data could improve our model training time while retaining most of the method's accuracy. I use the default settings (i.e. 95% of variation explained by the selected principle components) for a new RF model.
+
+```{r}
+# Model
+set.seed(450921)
+start.time <- Sys.time()
+model_rf_pca <- train(classe~.,data=training,method="rf",trControl=trainControl(method = "cv", number = 4),preProcess="pca")
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+time.taken
+time.takenRFPCA<-time.taken
+# Prediction in validation sample
+pred_rf_pca <- predict(model_rf_pca, validation)
+# Cross validation
+cm_rf_pca <-confusionMatrix(pred_rf_pca, validation$classe); print(cm_rf_pca)
+```
+
+PCA pre-processing improves our model creation time from a `r time.takenRF` to a `r time.takenRFPCA` but erodes the accuracy from `r round(unname(cm_rf$overall[1]),3)` to `r round(unname(cm_rf_pca$overall[1]),3)`.  As noted, we are aiming for maximum accuracy, so we deem the algorithm training efficiency gain to be not worth the sacrifice.
+
+### Conclusion and "Test" sample results
+
+In conclusion, our best-performing model is the RF model, and it has an out-of-sample accuracy rate of `r round(unname(cm_rf$overall[1]),3)` and therefore an out-of-sample error rate of `r round(1-unname(cm_rf$overall[1]),3)`.  Note that by "out-of-sample" we mean in the validation sample as described above.  
+
+Finally, we apply the RF model to the "Test" sample of 20 instances for input into the feedback portion of this assignment.  Feedback indicated that all were correct.  Given our out-of-sample error rate, we would expect a probability of getting all 20 correct of `r 100*round(unname(cm_rf$overall[1]),3)^20`%.
+
+```{r}
+answers<-predict(model_rf,tsdata);answers
+# The answers I submitted on 1/21/15 were
+# B A B A A E D B A A B C B A E E A B B B
+```
+
+```{r, echo=FALSE}
+#how to do HTML... 
+#For your jekyl / gh-pages presentation, try:
+#"http://<YOUR_GITHUB_ACCT_NAME>.github.io/<THE_NAME_OF_YOUR_REPO>/index.html"
+#To view html pages hosted in repos on Github, this has helped many students:
+#http://htmlpreview.github.io/
+```
