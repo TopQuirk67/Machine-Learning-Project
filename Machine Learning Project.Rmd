@@ -18,7 +18,11 @@ tsdata<-read.csv("pml-testing.csv")
 
 ## Executive Summary
 
+We create a machine-learning algorithm for predicting which of five categories of exercise is being performed based on a large dataset of sensor data.  We split the data set into training and validation sets and attempt three different modeling techniques.  The best out-of-sample error rate is achieved with the Random Forest algorithm, which we adopt and apply successfully to a 20-sample "test" data set.  
+
 ## Introduction
+
+For graders, I have measured the number of words in this document to be 1161 excluding code output.  Thanks for grading!
 
 Our purpose is to predict which 5 different exercises subjects are performing in a `r dim(tsdata)[1]` element test set where the exercise label is hidden.  Modeling may proceed from a large dataset consisting of `r dim(trdata)[1]` samples of `r dim(trdata)[2]` variables including the revealed exercise labels (variable `r names(trdata)[length(trdata)]` with valid levels `r levels(trdata[,length(trdata)])`).  
 
@@ -26,12 +30,12 @@ Our purpose is to predict which 5 different exercises subjects are performing in
 
 Creating a prediction model consists of six steps.  We note as follows an outline of how we will proceed.
 
-- Question.  Our goal is to create a model which accurately predicts the exercise in the test sample.  We want to get a perfect score on the assignment, so naturally we will always put priority on accuracy of such considerations as interpretability, speed, simplicity, and scalability.
+- Question.  Our goal is to create a model which accurately predicts the exercise in the test sample.  We want to get a perfect score on the assignment, so naturally we will always put priority on accuracy over such considerations as interpretability, speed, simplicity, and scalability.
 - Input Data.  Our input data is as described above.
 - Features.  We must determine which features of the data are useful in achieving an optimal answer to our data modeling question.  In the "Exploratory Data Analysis" section below, we address pre-processing of the data with this goal in mind.
-- Algorithm.  We have a large number of algorithms available for modeling, however, few are appropriate to the outcome variable, a factor variable with five discrete levels.  The only models we consider are therefore classification trees, linear discriminant analysis and random forests.  Other algorithms such as regressions and generalized linear models are not natural fits to categorical independent variables.
-- Parameters.  Once we have determined the likely best algorithm (i.e. the most accurate), we may tune is execution to arrives at the best possible results.  In our case we will briefly explore the use of PCA pre-processing.
-- Evaluation.  The evaluation will consists of two parts: testing on a saved-out portion of the training set and then the final test of submiting the algorithm to evaluation through the test set.
+- Algorithm.  We have a large number of algorithms available for modeling, however, few are appropriate to the outcome variable, a factor variable with five discrete levels.  The only models we consider are therefore classification trees, linear discriminant analysis and random forests.  Other algorithms such as regressions and generalized linear models are not natural fits to categorical independent variables.  A boosted tree model proved prohibitively CPU-intensive.  
+- Parameters.  Once we have determined the likely best algorithm (i.e. the most accurate), we may tune is execution to arrive at the best possible results.  In our case we will briefly explore the use of PCA pre-processing.
+- Evaluation.  The evaluation will consists of two parts: testing on a saved-out portion ("validation") of the training set and then the final test of submiting the algorithm to evaluation through the test set.
 
 ## Exploratory Data Analysis
 
@@ -61,15 +65,15 @@ There were a LOT of missing variables in the original training set also, but all
 
 ### Low variance and Collinearity Check
 
-We find that `r length(nearZeroVar(trdata,saveMetrics=TRUE))` variables in the training set have near-zero variance.  
+We find that `r sum(nearZeroVar(trdata,saveMetrics=TRUE)$nzv)` variables in the training set have near-zero variance.  
 
-We also want to investigate the correlations between variables with an eye to reducing unnecessary dimensions in the data.  To that end, we plot below the correlation matrix for all variable, and, following that, all variables with an absolute correlation greater than `r cor_cut<-0.975;cor_cut` with at least one other variable.  A pairs plot shows the relationships between these features.
+We also want to investigate the correlations between variables with an eye to reducing unnecessary dimensions in the data.  To that end, we plot below the correlation matrix for variables with an absolute correlation greater than `r cor_cut<-0.975;cor_cut` with at least one other variable.  A pairs plot shows the relationships between these features.
 
 
 ```{r, echo=FALSE}
 cormtx<-cor(trdata[sapply(trdata, is.numeric)])
 diag(cormtx)<-0
-levelplot(cormtx,scales=list(x=list(rot=90)))
+#levelplot(cormtx,scales=list(x=list(rot=90)))
 idx1d<-which(abs(cormtx)>cor_cut)
 idxcol<-idx1d %% dim(cormtx)[1]
 idxrow<-ceiling(idx1d/dim(cormtx)[1])
@@ -80,7 +84,7 @@ hcortrdata <- trdata[,hcor]
 pairs(hcortrdata)
 ```
 
-While some of the variables are indeed highly correlated, there is nonetheless structure in nearly every relationship.  Even the highest correlation (`r max(cormtx2)`), between *roll_belt* and *accel_belt_z*, is incomplete.  If our purpose were to gain efficiency, it might be useful to reduce dimensionality via PCA analysis, but instead we retain all the variables, at least for the initial model formulation.  
+While some of the variables are indeed highly correlated, there is nonetheless structure in nearly every relationship.  Even the highest correlation (`r round(max(cormtx2),4)`), between *roll_belt* and *accel_belt_z*, is incomplete.  If our purpose were to gain efficiency, it might be useful to reduce dimensionality via PCA analysis, but instead we retain all the variables, at least for the initial model formulation.  
 
 ### Initial Models and Cross-Validation
 
@@ -92,7 +96,7 @@ training <- trdata[inTrain,]
 validation <- trdata[-inTrain,]
 ```
         
-We attempt three initial models using all `r dim(training)[2]-1` features in the training set.  Those models are a Classification and Regression Tree (method="rpart"), a Linear Discriminant Analysis model (method="lda"), and a Random Forest model (method="rf").  In the RD model, we have chosen to use cross validation in the training control option.  Cross validation in the "validation" sample follows model formation below.  (The RF method training is prohibitively long, so we have inserted code to measure its execution time for comparison below.)
+We attempt three initial models using all `r dim(training)[2]-1` features in the training set.  Those models are a Classification and Regression Tree ("CART"; method="rpart"), a Linear Discriminant Analysis model ("LDA"; method="lda"), and a Random Forest model ("RF"; method="rf").  In the RF model, we have chosen to use cross validation in the training control option.  Cross validation in the "validation" sample follows model formation below.  (The RF method training is long, so we have inserted code to measure its execution time for comparison below.)
 
 
 ```{r}
@@ -110,6 +114,11 @@ time.takenRF<-time.taken
 pred_rpart  <- predict(model_rpart, validation)
 pred_lda    <- predict(model_lda, validation)
 pred_rf     <- predict(model_rf, validation)
+```
+
+Below we perform the cross-validations in the validation data set.
+
+```{r}
 # Cross validation
 cm_rpart<-confusionMatrix(pred_rpart, validation$classe); print(cm_rpart)
 cm_lda  <-confusionMatrix(pred_lda  , validation$classe); print(cm_lda)
@@ -137,13 +146,13 @@ pred_rf_pca <- predict(model_rf_pca, validation)
 cm_rf_pca <-confusionMatrix(pred_rf_pca, validation$classe); print(cm_rf_pca)
 ```
 
-PCA pre-processing improves our model creation time from a `r time.takenRF` to a `r time.takenRFPCA` but erodes the accuracy from `r round(unname(cm_rf$overall[1]),3)` to `r round(unname(cm_rf_pca$overall[1]),3)`.  As noted, we are aiming for maximum accuracy, so we deem the algorithm training efficiency gain to be not worth the sacrifice.
+PCA pre-processing improves our model creation time from `r round(time.takenRF,2)` minutes to `r round(time.takenRFPCA,2)` minutes but erodes the accuracy from `r round(unname(cm_rf$overall[1]),3)` to `r round(unname(cm_rf_pca$overall[1]),3)` as well as suffering from errors.  As noted, we are aiming for maximum accuracy, so we deem the algorithm training efficiency gain to be not worth the sacrifice.
 
 ### Conclusion and "Test" sample results
 
 In conclusion, our best-performing model is the RF model, and it has an out-of-sample accuracy rate of `r round(unname(cm_rf$overall[1]),3)` and therefore an out-of-sample error rate of `r round(1-unname(cm_rf$overall[1]),3)`.  Note that by "out-of-sample" we mean in the validation sample as described above.  
 
-Finally, we apply the RF model to the "Test" sample of 20 instances for input into the feedback portion of this assignment.  Feedback indicated that all were correct.  Given our out-of-sample error rate, we would expect a probability of getting all 20 correct of `r 100*round(unname(cm_rf$overall[1]),3)^20`%.
+Finally, we apply the RF model to the "Test" sample of 20 instances for input into the feedback portion of this assignment.  Feedback indicated that all were correct.  Given our out-of-sample error rate, we would expect a probability of getting all 20 correct of `r round(100*(unname(cm_rf$overall[1]))^20,1)`%, so it is not terribly surprising that we were successful.
 
 ```{r}
 answers<-predict(model_rf,tsdata);answers
